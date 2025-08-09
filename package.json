@@ -1,0 +1,33 @@
+{
+  "name": "pdflibrary",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "rimraf dist && tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "migrate": "tsx scripts/run-migrations.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "openai": "^4.59.0",
+    "p-limit": "^4.0.0",
+    "pg": "^8.12.0",
+    "pino": "^9.0.0",
+    "uuid": "^9.0.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.19.10",
+    "nodemon": "^3.1.0",
+    "pino-pretty": "^11.2.2",
+    "rimraf": "^5.0.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.5.4"
+  }
+}
