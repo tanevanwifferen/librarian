@@ -1,7 +1,9 @@
 // src/routes/search.ts
 // What: /search route for semantic vector search over chunks.
-// How: Validates input with zod, embeds the query, sets ivfflat.probes within a transaction,
-//      performs cosine distance search via pgvector ivfflat, and returns scored matches.
+// How: Validates input with zod, embeds the query. Opens a short transaction just for
+//      SET LOCAL ivfflat.probes and the SELECT, then commits. Maps results and responds
+//      AFTER the transaction to avoid rolling back when no transaction is active, which
+//      prevents "there is no transaction in progress" warnings.
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -29,8 +31,11 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     const qvParam = vectorToParam(qv);
 
     const client = await pool.connect();
+    let rows: any[] = [];
+    let inTx = false;
     try {
       await client.query('BEGIN');
+      inTx = true;
       // Better recall for ivfflat queries
       await client.query('SET LOCAL ivfflat.probes = 10');
 
@@ -44,23 +49,27 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         LIMIT $2
       `;
       const r = await client.query(sql, [qvParam, topK]);
+      rows = r.rows;
       await client.query('COMMIT');
-
-      const matches = r.rows.map((row: any) => ({
-        book: { id: row.b_id as string, filename: row.filename as string, path: row.path as string },
-        chunk_index: Number(row.chunk_index),
-        content: String(row.content),
-        distance: Number(row.distance),
-        score: clampSimilarity(Number(row.distance)),
-      }));
-
-      res.json({ query: q, topK, matches });
+      inTx = false;
     } catch (err) {
-      try { await client.query('ROLLBACK'); } catch {}
+      if (inTx) {
+        try { await client.query('ROLLBACK'); } catch {}
+      }
       throw err;
     } finally {
       client.release();
     }
+
+    const matches = rows.map((row: any) => ({
+      book: { id: row.b_id as string, filename: row.filename as string, path: row.path as string },
+      chunk_index: Number(row.chunk_index),
+      content: String(row.content),
+      distance: Number(row.distance),
+      score: clampSimilarity(Number(row.distance)),
+    }));
+
+    res.json({ query: q, topK, matches });
   } catch (err) {
     next(err);
   }

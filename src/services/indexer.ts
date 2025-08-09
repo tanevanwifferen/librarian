@@ -46,13 +46,14 @@ export async function runScan(correlationId: string): Promise<ScanResult> {
   await Promise.all(
     files.map((f) =>
       limit(async () => {
-        const client = await pool.connect();
-        // Idempotency handled by early INSERT ... ON CONFLICT (filename) DO NOTHING
+        // Generate ID up-front; rely on unique(filename) for idempotency
         const bookId = uuidv4();
+        let bookInserted = false;
 
         try {
           // 1) Insert book row early to reserve work; skip if already indexed (by filename)
-          const insertRes = await client.query(
+          // Use pool.query for one-off statement to avoid holding a client
+          const insertRes = await pool.query(
             'INSERT INTO books (id, filename, path) VALUES ($1, $2, $3) ON CONFLICT (filename) DO NOTHING',
             [bookId, f.filename, f.path],
           );
@@ -61,50 +62,65 @@ export async function runScan(correlationId: string): Promise<ScanResult> {
             skipped_existing.push(f.filename);
             return;
           }
+          bookInserted = true;
 
-          // 2) Convert to Markdown
+          // 2) Convert to Markdown (no DB connection held during CPU/IO heavy work)
           const md = await convertPdfToMarkdown(f.path);
 
           // 3) Chunk markdown
           const chunks = chunkMarkdown(md);
           if (chunks.length === 0) {
             logger.warn({ file: f.path }, 'No chunks produced; deleting book row');
-            await client.query('DELETE FROM books WHERE id = $1', [bookId]);
+            await pool.query('DELETE FROM books WHERE id = $1', [bookId]);
             return;
           }
 
-          // 4) Embed each chunk
+          // 4) Embed each chunk (still no DB connection held)
           const vectors = await embedMany(chunks);
 
-          // 5) Insert chunks in a DB transaction
-          await client.query('BEGIN');
-          for (let i = 0; i < chunks.length; i++) {
-            const chunkId = uuidv4();
-            const embedding = vectorToParam(vectors[i]);
-            await client.query(
-              'INSERT INTO chunks (id, book_id, chunk_index, content, embedding) VALUES ($1, $2, $3, $4, $5::vector)',
-              [chunkId, bookId, i, chunks[i], embedding],
-            );
+          // 5) Insert chunks in a DB transaction with a short-lived client
+          const client = await pool.connect();
+          let inTx = false;
+          try {
+            await client.query('BEGIN');
+            inTx = true;
+
+            for (let i = 0; i < chunks.length; i++) {
+              const chunkId = uuidv4();
+              const embedding = vectorToParam(vectors[i]);
+              await client.query(
+                'INSERT INTO chunks (id, book_id, chunk_index, content, embedding) VALUES ($1, $2, $3, $4, $5::vector)',
+                [chunkId, bookId, i, chunks[i], embedding],
+              );
+            }
+
+            await client.query('COMMIT');
+            inTx = false;
+          } catch (txErr) {
+            if (inTx) {
+              try {
+                await client.query('ROLLBACK');
+              } catch {
+                // ignore rollback errors
+              }
+            }
+            throw txErr;
+          } finally {
+            client.release();
           }
-          await client.query('COMMIT');
 
           newly_indexed.push({ id: bookId, filename: f.filename, path: f.path, chunks: chunks.length });
         } catch (err: any) {
-          try {
-            await client.query('ROLLBACK');
-          } catch {
-            // ignore rollback errors
-          }
-          // Attempt cleanup if the book was inserted but chunks failed
-          try {
-            await client.query('DELETE FROM books WHERE id = $1', [bookId]);
-          } catch {
-            // ignore cleanup errors
+          // Attempt cleanup if the book was inserted but downstream steps failed
+          if (bookInserted) {
+            try {
+              await pool.query('DELETE FROM books WHERE id = $1', [bookId]);
+            } catch {
+              // ignore cleanup errors
+            }
           }
           logger.error({ err, file: f.path }, 'Indexing failed');
           failed.push({ filename: f.filename, error: err?.message ?? 'Unknown error' });
-        } finally {
-          client.release();
         }
       }),
     ),

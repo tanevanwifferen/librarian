@@ -1,7 +1,8 @@
 // src/routes/chat.ts
 // What: /chat route for RAG-style chat using OpenAI gpt-4o.
 // How: Validates input, embeds last user message for retrieval, fetches topK chunks (ivfflat with probes),
-//      builds a system+context prompt, and calls OpenAI chat completions. Returns { answer, sources, used_topK }.
+//      builds a system+context prompt, and calls OpenAI chat completions. The DB transaction is limited strictly
+//      to SET LOCAL + SELECT and guarded with an inTx flag to avoid ROLLBACK when no transaction is active.
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -44,8 +45,10 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     // Retrieve topK chunks by cosine distance
     const client = await pool.connect();
     let rows: any[] = [];
+    let inTx = false;
     try {
       await client.query('BEGIN');
+      inTx = true;
       await client.query('SET LOCAL ivfflat.probes = 10');
       const sql = `
         WITH q AS (SELECT $1::vector AS qv)
@@ -59,8 +62,11 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       const r = await client.query(sql, [qvParam, topK]);
       rows = r.rows;
       await client.query('COMMIT');
+      inTx = false;
     } catch (err) {
-      try { await client.query('ROLLBACK'); } catch {}
+      if (inTx) {
+        try { await client.query('ROLLBACK'); } catch {}
+      }
       throw err;
     } finally {
       client.release();
