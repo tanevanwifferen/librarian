@@ -1,9 +1,9 @@
 // src/services/indexer.ts
 // What: Orchestrates scan → convert → chunk → embed → store pipeline for new PDFs.
-// How: Scans the library dir, pre-checks existence by full path/filename to avoid reprocessing,
-//      then inserts a book (INSERT ... ON CONFLICT (filename) DO NOTHING to guard races), converts to Markdown
-//      via Python markitdown with guardrails, chunks Markdown, embeds chunks with OpenAI, and inserts
-//      chunks/embeddings in a single DB transaction using ::vector casting. Concurrency controlled via p-limit.
+ // How: Scans the library dir, relies on INSERT ... ON CONFLICT (filename) DO NOTHING for idempotency/race-safety,
+ //      then converts to Markdown via Python markitdown with guardrails, chunks Markdown, embeds chunks with OpenAI,
+ //      and inserts chunks/embeddings in a single DB transaction using ::vector casting.
+ //      Concurrency controlled via p-limit. Avoids pool leaks by not returning before client.release() in finally.
 
 import { randomBytes } from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
@@ -37,7 +37,7 @@ export interface ScanResult {
 export async function runScan(correlationId: string): Promise<ScanResult> {
   const start = Date.now();
   const files = await scanLibrary();
-  const limit = pLimit(Number(config.INDEX_CONCURRENCY) || 2);
+  const limit = pLimit(Number(config.INDEX_CONCURRENCY) || 1);
 
   const newly_indexed: NewIndexed[] = [];
   const skipped_existing: string[] = [];
@@ -47,15 +47,7 @@ export async function runScan(correlationId: string): Promise<ScanResult> {
     files.map((f) =>
       limit(async () => {
         const client = await pool.connect();
-        // Pre-check by path/filename to avoid reprocessing on reruns
-        const existing = await client.query(
-          'SELECT id FROM books WHERE path = $1 OR filename = $2 LIMIT 1',
-          [f.path, f.filename],
-        );
-        if (existing.rowCount > 0) {
-          skipped_existing.push(f.filename);
-          return;
-        }
+        // Idempotency handled by early INSERT ... ON CONFLICT (filename) DO NOTHING
         const bookId = uuidv4();
 
         try {
