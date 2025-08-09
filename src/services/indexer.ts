@@ -1,6 +1,7 @@
 // src/services/indexer.ts
 // What: Orchestrates scan → convert → chunk → embed → store pipeline for new PDFs.
-// How: Scans the library dir, inserts a book (skip on filename unique violation), converts to Markdown
+// How: Scans the library dir, pre-checks existence by full path/filename to avoid reprocessing,
+//      then inserts a book (INSERT ... ON CONFLICT (filename) DO NOTHING to guard races), converts to Markdown
 //      via Python markitdown with guardrails, chunks Markdown, embeds chunks with OpenAI, and inserts
 //      chunks/embeddings in a single DB transaction using ::vector casting. Concurrency controlled via p-limit.
 
@@ -46,23 +47,27 @@ export async function runScan(correlationId: string): Promise<ScanResult> {
     files.map((f) =>
       limit(async () => {
         const client = await pool.connect();
+        // Pre-check by path/filename to avoid reprocessing on reruns
+        const existing = await client.query(
+          'SELECT id FROM books WHERE path = $1 OR filename = $2 LIMIT 1',
+          [f.path, f.filename],
+        );
+        if (existing.rowCount > 0) {
+          skipped_existing.push(f.filename);
+          return;
+        }
         const bookId = uuidv4();
 
         try {
-          // 1) Insert book row (handle unique violation)
-          try {
-            await client.query('INSERT INTO books (id, filename, path) VALUES ($1, $2, $3)', [
-              bookId,
-              f.filename,
-              f.path,
-            ]);
-          } catch (e: any) {
-            if (e && e.code === '23505') {
-              // unique violation on filename -> skip
-              skipped_existing.push(f.filename);
-              return;
-            }
-            throw e;
+          // 1) Insert book row early to reserve work; skip if already indexed (by filename)
+          const insertRes = await client.query(
+            'INSERT INTO books (id, filename, path) VALUES ($1, $2, $3) ON CONFLICT (filename) DO NOTHING',
+            [bookId, f.filename, f.path],
+          );
+          if (insertRes.rowCount === 0) {
+            // Already exists due to filename unique constraint -> skip
+            skipped_existing.push(f.filename);
+            return;
           }
 
           // 2) Convert to Markdown
