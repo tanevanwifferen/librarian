@@ -49,7 +49,7 @@ let lastResult: ScanResult | undefined;
 let timer: NodeJS.Timeout | null = null;
 let lastTickAt = Date.now();
 
-const DEFAULT_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const DEFAULT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 1 day
 const INTERVAL_MS = Number(config.SCAN_INTERVAL_MS ?? DEFAULT_INTERVAL_MS) || DEFAULT_INTERVAL_MS;
 const LATEST_BOOKS_LIMIT = Number(config.STATUS_LATEST_BOOKS_LIMIT ?? 10) || 10;
 
