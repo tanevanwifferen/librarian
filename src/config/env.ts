@@ -29,11 +29,16 @@ const schema = z.object({
   PYTHON_BIN: z.string().min(1).default('python3'),
   OPENAI_EMBED_MODEL: z.string().default('text-embedding-3-small'),
   OPENAI_CHAT_MODEL: z.string().default('gpt-4o'),
-  INDEX_CONCURRENCY: intWithDefault(2),
+  INDEX_CONCURRENCY: intWithDefault(1),
   PORT: intWithDefault(3000),
   SCAN_INTERVAL_MS: intWithDefault(60 * 60 * 1000),
   STATUS_LATEST_BOOKS_LIMIT: intWithDefault(10),
   NODE_ENV: z.enum(['production', 'development', 'test']).optional().default('development'),
+  // New controls for resource usage on low-RAM machines
+  MARKITDOWN_MAX_BYTES: intWithDefault(20 * 1024 * 1024), // 20 MB
+  MARKITDOWN_TIMEOUT_MS: intWithDefault(300_000),         // 5 minutes
+  EMBED_BATCH_SIZE: intWithDefault(32),
+  INSERT_BATCH_SIZE: intWithDefault(64),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -57,6 +62,11 @@ export interface AppConfig {
   NODE_ENV?: 'production' | 'development' | 'test';
   // Optional environment overlay applied only when a venv interpreter is selected from VENV_DIR.
   PYTHON_ENV?: Record<string, string>;
+  // New resource-control settings
+  MARKITDOWN_MAX_BYTES: number;
+  MARKITDOWN_TIMEOUT_MS: number;
+  EMBED_BATCH_SIZE: number;
+  INSERT_BATCH_SIZE: number;
 }
 
 // Start with parsed environment, then compute Python resolution precedence.

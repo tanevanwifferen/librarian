@@ -2,7 +2,7 @@
 // What: Orchestrates scan → convert → chunk → embed → store pipeline for new PDFs.
  // How: Scans the library dir, relies on INSERT ... ON CONFLICT (filename) DO NOTHING for idempotency/race-safety,
  //      then converts to Markdown via Python markitdown with guardrails, chunks Markdown, embeds chunks with OpenAI,
- //      and inserts chunks/embeddings in a single DB transaction using ::vector casting.
+ //      and inserts chunks/embeddings in small batched DB transactions using ::vector casting.
  //      Concurrency controlled via p-limit. Avoids pool leaks by not returning before client.release() in finally.
 
 import { randomBytes } from 'crypto';
@@ -64,57 +64,143 @@ export async function runScan(correlationId: string): Promise<ScanResult> {
           }
           bookInserted = true;
 
+          // Mark as scanned immediately so we retain the book even if downstream steps fail.
+          try {
+            await pool.query('UPDATE books SET status = $1, error_text = NULL WHERE id = $2', [
+              'scanned',
+              bookId,
+            ]);
+          } catch {
+            // ignore status update errors
+          }
+
           // 2) Convert to Markdown (no DB connection held during CPU/IO heavy work)
-          const md = await convertPdfToMarkdown(f.path);
+          // Pass resource guardrails from config to reduce memory pressure on old hardware
+          let md: string;
+          try {
+            md = await convertPdfToMarkdown(f.path, {
+              timeoutMs: config.MARKITDOWN_TIMEOUT_MS,
+              maxBytes: config.MARKITDOWN_MAX_BYTES,
+            });
+          } catch (convErr: any) {
+            if (bookInserted) {
+              try {
+                await pool.query('UPDATE books SET status = $1, error_text = $2 WHERE id = $3', [
+                  'failed_parse',
+                  convErr?.message ?? 'PDF->Markdown conversion failed',
+                  bookId,
+                ]);
+              } catch {
+                // ignore update errors
+              }
+            }
+            throw convErr;
+          }
 
           // 3) Chunk markdown
           const chunks = chunkMarkdown(md);
           if (chunks.length === 0) {
-            logger.warn({ file: f.path }, 'No chunks produced; deleting book row');
-            await pool.query('DELETE FROM books WHERE id = $1', [bookId]);
+            logger.warn({ file: f.path }, 'No chunks produced; marking book as failed_parse');
+            try {
+              await pool.query('UPDATE books SET status = $1, error_text = $2 WHERE id = $3', [
+                'failed_parse',
+                'No chunks produced',
+                bookId,
+              ]);
+            } catch {
+              // ignore update errors
+            }
             return;
           }
 
-          // 4) Embed each chunk (still no DB connection held)
-          const vectors = await embedMany(chunks);
+          // 4) Embed and insert in small batches to cap memory and DB pressure
+          const batchSize = Number(config.EMBED_BATCH_SIZE) || 32;
+          for (let offset = 0; offset < chunks.length; offset += batchSize) {
+            const chunkBatch = chunks.slice(offset, offset + batchSize);
 
-          // 5) Insert chunks in a DB transaction with a short-lived client
-          const client = await pool.connect();
-          let inTx = false;
-          try {
-            await client.query('BEGIN');
-            inTx = true;
-
-            for (let i = 0; i < chunks.length; i++) {
-              const chunkId = uuidv4();
-              const embedding = vectorToParam(vectors[i]);
-              await client.query(
-                'INSERT INTO chunks (id, book_id, chunk_index, content, embedding) VALUES ($1, $2, $3, $4, $5::vector)',
-                [chunkId, bookId, i, chunks[i], embedding],
-              );
-            }
-
-            await client.query('COMMIT');
-            inTx = false;
-          } catch (txErr) {
-            if (inTx) {
+            // 4a) Compute embeddings for the batch (no DB connection held)
+            let vectorsBatch: number[][];
+            try {
+              vectorsBatch = await embedMany(chunkBatch);
+            } catch (embErr: any) {
               try {
-                await client.query('ROLLBACK');
+                await pool.query('UPDATE books SET status = $1, error_text = $2 WHERE id = $3', [
+                  'failed_embed',
+                  embErr?.message ?? 'Embedding failed',
+                  bookId,
+                ]);
               } catch {
-                // ignore rollback errors
+                // ignore update errors
               }
+              throw embErr;
             }
-            throw txErr;
-          } finally {
-            client.release();
+
+            // 5) Insert this batch in a short transaction to limit WAL/memory
+            const client = await pool.connect();
+            let inTx = false;
+            try {
+              await client.query('BEGIN');
+              inTx = true;
+
+              for (let i = 0; i < chunkBatch.length; i++) {
+                const chunkId = uuidv4();
+                const embedding = vectorToParam(vectorsBatch[i]);
+                await client.query(
+                  'INSERT INTO chunks (id, book_id, chunk_index, content, embedding) VALUES ($1, $2, $3, $4, $5::vector)',
+                  [chunkId, bookId, offset + i, chunkBatch[i], embedding],
+                );
+              }
+
+              await client.query('COMMIT');
+              inTx = false;
+            } catch (txErr: any) {
+              if (inTx) {
+                try {
+                  await client.query('ROLLBACK');
+                } catch {
+                  // ignore rollback errors
+                }
+              }
+              try {
+                await pool.query('UPDATE books SET status = $1, error_text = $2 WHERE id = $3', [
+                  'failed_insert',
+                  txErr?.message ?? 'Batch insert failed',
+                  bookId,
+                ]);
+              } catch {
+                // ignore update errors
+              }
+              throw txErr;
+            } finally {
+              client.release();
+            }
+          }
+
+          // All batches inserted successfully -> mark as indexed
+          try {
+            await pool.query(
+              'UPDATE books SET status = $1, error_text = NULL, path = $2, /* keep path fresh */ created_at = created_at, last_indexed_at = NOW() WHERE id = $3',
+              ['indexed', f.path, bookId],
+            );
+            // Also store chunk count if column exists (migration 002)
+            try {
+              await pool.query('UPDATE books SET chunks_count = $1 WHERE id = $2', [chunks.length, bookId]);
+            } catch {
+              // ignore if column not present
+            }
+          } catch {
+            // ignore status update errors
           }
 
           newly_indexed.push({ id: bookId, filename: f.filename, path: f.path, chunks: chunks.length });
         } catch (err: any) {
-          // Attempt cleanup if the book was inserted but downstream steps failed
+          // Attempt to record error on the book if downstream steps failed; do not delete the book
           if (bookInserted) {
             try {
-              await pool.query('DELETE FROM books WHERE id = $1', [bookId]);
+              await pool.query('UPDATE books SET error_text = $2 WHERE id = $1', [
+                bookId,
+                err?.message ?? 'Unknown error',
+              ]);
             } catch {
               // ignore cleanup errors
             }
