@@ -12,7 +12,8 @@ import { embedText } from '../services/embeddings.js';
 import { clampSimilarity, vectorToParam } from '../util/sql.js';
 
 const schema = z.object({
-  query: z.string().min(1),
+  // Cap query length to avoid oversized embedding requests and responses
+  query: z.string().min(1).max(2000),
   topK: z.number().int().positive().max(100).optional().default(8),
 });
 
@@ -41,7 +42,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 
       const sql = `
         WITH q AS (SELECT $1::vector AS qv)
-        SELECT c.id, c.book_id, c.chunk_index, c.content, (c.embedding <=> q.qv) AS distance,
+        SELECT c.id, c.book_id, c.chunk_index, (c.embedding <=> q.qv) AS distance,
                b.id AS b_id, b.filename, b.path
         FROM chunks c
         JOIN books b ON b.id = c.book_id, q
@@ -61,10 +62,10 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       client.release();
     }
 
+    // Do not include raw chunk content in the /search response to keep payloads small.
     const matches = rows.map((row: any) => ({
       book: { id: row.b_id as string, filename: row.filename as string, path: row.path as string },
       chunk_index: Number(row.chunk_index),
-      content: String(row.content),
       distance: Number(row.distance),
       score: clampSimilarity(Number(row.distance)),
     }));
