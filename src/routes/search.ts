@@ -40,13 +40,16 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       // Better recall for ivfflat queries
       await client.query('SET LOCAL ivfflat.probes = 10');
 
+      // Ensure only one best match per book (by filename, since there's no title column).
+      // DISTINCT ON picks the closest chunk per file, then we cap to topK unique books.
       const sql = `
         WITH q AS (SELECT $1::vector AS qv)
-        SELECT c.id, c.book_id, c.chunk_index, (c.embedding <=> q.qv) AS distance,
+        SELECT DISTINCT ON (b.filename)
+               c.id, c.book_id, c.chunk_index, (c.embedding <=> q.qv) AS distance,
                b.id AS b_id, b.filename, b.path
         FROM chunks c
         JOIN books b ON b.id = c.book_id, q
-        ORDER BY c.embedding <=> q.qv
+        ORDER BY b.filename, (c.embedding <=> q.qv)
         LIMIT $2
       `;
       const r = await client.query(sql, [qvParam, topK]);
