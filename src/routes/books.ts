@@ -27,7 +27,7 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   }
 });
 
-router.get('/:id/download', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/:id([0-9a-fA-F-]{36})/download', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = String(req.params.id);
     const sql = `SELECT id, filename, path FROM books WHERE id = $1 LIMIT 1`;
