@@ -108,7 +108,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         ...messages,
       ],
       reasoning_effort: 'low',
-      verbosity: 'low'
+      verbosity: 'medium'
     });
 
     const answer = completion.choices?.[0]?.message?.content ?? '';
