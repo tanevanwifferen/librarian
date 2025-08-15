@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { pool } from '../db/pool.js';
 import { embedText } from '../services/embeddings.js';
 import { clampSimilarity, vectorToParam } from '../util/sql.js';
+import { v4 as uuidv4 } from 'uuid';
 
 const schema = z.object({
   // Cap query length to avoid oversized embedding requests and responses
@@ -30,6 +31,18 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 
     const qv = await embedText(q);
     const qvParam = vectorToParam(qv);
+
+    // Log the search query with optional embedding and parameters.
+    // We insert outside the retrieval transaction to keep the critical path short.
+    try {
+      const logId = uuidv4();
+      await pool.query(
+        'INSERT INTO query_logs (id, kind, query_text, embedding, top_k, temperature) VALUES ($1,$2,$3,$4::vector,$5,$6)',
+        [logId, 'search', q, qvParam, topK, null],
+      );
+    } catch {
+      // Swallow logging errors to avoid impacting the endpoint
+    }
 
     const client = await pool.connect();
     let rows: any[] = [];

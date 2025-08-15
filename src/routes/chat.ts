@@ -11,6 +11,7 @@ import openaiClient from '../services/embeddings.js';
 import config from '../config/env.js';
 import { embedText } from '../services/embeddings.js';
 import { vectorToParam } from '../util/sql.js';
+import { v4 as uuidv4 } from 'uuid';
 
 const MsgSchema = z.object({
   role: z.enum(['system', 'user', 'assistant']),
@@ -41,6 +42,18 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     // Embed query
     const qv = await embedText(retrievalQuery);
     const qvParam = vectorToParam(qv);
+
+    // Log the chat query with optional embedding and parameters.
+    // Insert is best-effort; failures should not affect the chat flow.
+    try {
+      const logId = uuidv4();
+      await pool.query(
+        'INSERT INTO query_logs (id, kind, query_text, embedding, top_k, temperature) VALUES ($1,$2,$3,$4::vector,$5,$6)',
+        [logId, 'chat', retrievalQuery, qvParam, topK, temperature],
+      );
+    } catch {
+      // Ignore logging failures
+    }
 
     // Retrieve topK chunks by cosine distance
     const client = await pool.connect();
