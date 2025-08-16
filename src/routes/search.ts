@@ -68,7 +68,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
         )
         SELECT * FROM best_per_book
         ORDER BY distance
-        LIMIT $2
+        LIMIT $2;
       `;
       const r = await client.query(sql, [qvParam, topK]);
       rows = r.rows;
