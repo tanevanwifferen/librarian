@@ -1,9 +1,11 @@
 // src/routes/search.ts
 // What: /search route for semantic vector search over chunks.
-// How: Validates input with zod, embeds the query. Opens a short transaction just for
-//      SET LOCAL ivfflat.probes and the SELECT, then commits. Maps results and responds
-//      AFTER the transaction to avoid rolling back when no transaction is active, which
-//      prevents "there is no transaction in progress" warnings.
+// How: Validates input with zod, embeds the query. Uses an optimized query that:
+//      1. First fetches top chunks using the ivfflat index (fast)
+//      2. Then deduplicates by book using ROW_NUMBER window function
+//      3. Returns only the best chunk per book, limited to topK books
+//      Opens a short transaction for SET LOCAL ivfflat.probes and SELECT, then commits.
+//      Maps results AFTER the transaction to avoid "no transaction in progress" warnings.
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -53,20 +55,29 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       // Better recall for ivfflat queries
       await client.query('SET LOCAL ivfflat.probes = 10');
 
-      // Ensure only one best match per book, then order books by the best distance.
-      // We first pick the closest chunk per book in a CTE, then sort that result by distance.
+      // Optimized query: First get top chunks using the index, then deduplicate by book.
+      // This is much faster as it leverages the ivfflat index to limit distance calculations.
       const sql = `
-        WITH
-        q AS (SELECT $1::vector AS qv),
-        best_per_book AS (
-          SELECT DISTINCT ON (b.id)
-                 c.id, c.book_id, c.chunk_index, (c.embedding <=> q.qv) AS distance,
-                 b.id AS b_id, b.filename, b.path
+        WITH top_chunks AS (
+          -- Get more chunks than needed to ensure we have enough unique books
+          SELECT c.id, c.book_id, c.chunk_index,
+                 c.embedding <=> $1::vector AS distance
           FROM chunks c
-          JOIN books b ON b.id = c.book_id, q
-          ORDER BY b.id, (c.embedding <=> q.qv)
+          ORDER BY c.embedding <=> $1::vector
+          LIMIT $2 * 3  -- Get 3x topK to ensure enough unique books after deduplication
+        ),
+        ranked_chunks AS (
+          -- Rank chunks within each book
+          SELECT tc.*,
+                 b.id AS b_id, b.filename, b.path,
+                 ROW_NUMBER() OVER (PARTITION BY tc.book_id ORDER BY tc.distance) AS rn
+          FROM top_chunks tc
+          JOIN books b ON b.id = tc.book_id
         )
-        SELECT * FROM best_per_book
+        -- Select only the best chunk per book, limit to topK books
+        SELECT id, book_id, chunk_index, distance, b_id, filename, path
+        FROM ranked_chunks
+        WHERE rn = 1
         ORDER BY distance
         LIMIT $2;
       `;
