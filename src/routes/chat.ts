@@ -5,14 +5,14 @@
 //      to SET LOCAL + SELECT and guarded with an inTx flag to avoid ROLLBACK when no transaction is active.
 
 import { Router, Request, Response, NextFunction } from "express";
-import { z } from "zod";
 import { pool } from "../db/pool.js";
 import openaiClient from "../services/embeddings.js";
 import config from "../config/env.js";
 import { embedText } from "../services/embeddings.js";
 import { vectorToParam } from "../util/sql.js";
 import { v4 as uuidv4 } from "uuid";
-import { JSONSchema } from "zod/v4/core";
+import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
 
 const MsgSchema = z.object({
   role: z.enum(["system", "user", "assistant"]),
@@ -30,6 +30,11 @@ const QueryGeneratorOutput = z.object({
   earthly_query: z.string(),
 });
 
+const QueryGeneratorOutputJSONSchema = {
+  ...zodToJsonSchema(QueryGeneratorOutput, "QueryGeneratorOutput"),
+  name: "QueryGeneratorOutput",
+};
+
 const router = Router();
 
 // Helper: Generate occult and earthly queries from message history
@@ -45,8 +50,9 @@ async function generateSearchQueries(messages: string, temperature: number) {
       { role: "system", content: "You are a search query generator." },
       { role: "user", content: prompt },
     ],
-    text: {
-      format: QueryGeneratorOutput,
+    response_format: {
+      type: "json_schema",
+      json_schema: QueryGeneratorOutputJSONSchema,
     },
     reasoning_effort: "low",
     verbosity: "low",
@@ -183,8 +189,8 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
       used_topK: topK,
       occult_query,
       earthly_query,
-      input_tokens: completion.usage.prompt_tokens,
-      output_tokens: completion.usage.completion_tokens,
+      input_tokens: completion.usage?.prompt_tokens ?? 0,
+      output_tokens: completion.usage?.completion_tokens ?? 0,
       model: config.OPENAI_CHAT_MODEL,
     });
   } catch (err) {

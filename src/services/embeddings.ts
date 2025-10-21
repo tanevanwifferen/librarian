@@ -2,8 +2,8 @@
 // What: OpenAI embedding helpers and shared client.
 // How: Initializes OpenAI client and exposes embedText/embedMany using OPENAI_EMBED_MODEL, validating 1536 dims.
 
-import OpenAI from 'openai';
-import config from '../config/env.js';
+import OpenAI from "openai";
+import config from "../config/env.js";
 
 const client = new OpenAI({ apiKey: config.OPENAI_API_KEY });
 
@@ -16,7 +16,11 @@ export async function embedText(text: string): Promise<number[]> {
   });
   const vec = res.data[0]?.embedding as number[] | undefined;
   if (!vec || vec.length !== EXPECTED_DIMS) {
-    throw new Error(`Unexpected embedding size; expected ${EXPECTED_DIMS}, got ${vec?.length ?? 'unknown'}`);
+    throw new Error(
+      `Unexpected embedding size; expected ${EXPECTED_DIMS}, got ${
+        vec?.length ?? "unknown"
+      }`
+    );
   }
   return vec;
 }
@@ -30,7 +34,9 @@ export async function embedMany(texts: string[]): Promise<number[][]> {
   const vectors = res.data.map((d: any) => d.embedding as number[]);
   for (const v of vectors) {
     if (v.length !== EXPECTED_DIMS) {
-      throw new Error(`Unexpected embedding size; expected ${EXPECTED_DIMS}, got ${v.length}`);
+      throw new Error(
+        `Unexpected embedding size; expected ${EXPECTED_DIMS}, got ${v.length}`
+      );
     }
   }
   return vectors;
