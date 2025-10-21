@@ -31,8 +31,25 @@ const QueryGeneratorOutput = z.object({
 });
 
 const QueryGeneratorOutputJSONSchema = {
-  ...zodToJsonSchema(QueryGeneratorOutput, "QueryGeneratorOutput"),
   name: "QueryGeneratorOutput",
+  schema: {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id: "https://example.com/query-generator-output.schema.json",
+    title: "QueryGeneratorOutput",
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      occult_query: {
+        type: "string",
+        description: "A query related to occult or esoteric knowledge.",
+      },
+      earthly_query: {
+        type: "string",
+        description: "A query related to worldly or scientific topics.",
+      },
+    },
+    required: ["occult_query", "earthly_query"],
+  },
 };
 
 const router = Router();
