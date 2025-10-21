@@ -45,10 +45,10 @@ async function generateSearchQueries(messages: string, temperature: number) {
       { role: "system", content: "You are a search query generator." },
       { role: "user", content: prompt },
     ],
-    text: {
-      format: QueryGeneratorOutput,
+    response_format: {
+      type: "json_schema",
+      schema: QueryGeneratorOutput,
     },
-    response_format: { type: "json_object" },
     reasoning_effort: "low",
     verbosity: "low",
   });
