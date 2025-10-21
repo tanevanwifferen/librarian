@@ -22,7 +22,7 @@ const MsgSchema = z.object({
 const schema = z.object({
   messages: z.array(MsgSchema).min(1),
   topK: z.number().int().positive().max(100).optional().default(4),
-  temperature: z.number().min(0).max(2).optional().default(0.2),
+  temperature: z.number().min(0).max(2).optional().default(1),
 });
 
 const QueryGeneratorOutput = z.object({
