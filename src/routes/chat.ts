@@ -47,7 +47,7 @@ async function generateSearchQueries(messages: string, temperature: number) {
     ],
     response_format: {
       type: "json_schema",
-      schema: QueryGeneratorOutput,
+      json_schema: QueryGeneratorOutput,
     },
     reasoning_effort: "low",
     verbosity: "low",
