@@ -196,9 +196,9 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
         { role: "system", content: `Context:\n${contextText}` },
         ...messages,
       ],
-      reasoning_effort: "low",
+      reasoning_effort: "minimal",
       verbosity: "medium",
-      max_completion_tokens: 450,
+      max_completion_tokens: 1000,
     });
 
     const answer = completion.choices?.[0]?.message?.content ?? "";
