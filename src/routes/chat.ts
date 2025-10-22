@@ -198,7 +198,7 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
       ],
       reasoning_effort: "minimal",
       verbosity: "medium",
-      max_completion_tokens: 1000,
+      max_completion_tokens: 1500,
     });
 
     const answer = completion.choices?.[0]?.message?.content ?? "";
