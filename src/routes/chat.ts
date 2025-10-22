@@ -116,14 +116,16 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
       const logId = uuidv4();
       await pool.query(
         "INSERT INTO query_logs (id, kind, query_text, embedding, top_k, temperature) VALUES ($1,$2,$3,$4::vector,$5,$6)",
-        [logId, "chat-occult", occult_query, occultParam, topK, temperature]
+        [logId, "chat", occult_query, occultParam, topK, temperature]
       );
       const logId2 = uuidv4();
       await pool.query(
         "INSERT INTO query_logs (id, kind, query_text, embedding, top_k, temperature) VALUES ($1,$2,$3,$4::vector,$5,$6)",
-        [logId2, "chat-earthly", earthly_query, earthlyParam, topK, temperature]
+        [logId2, "chat", earthly_query, earthlyParam, topK, temperature]
       );
-    } catch {}
+    } catch (e) {
+      console.error("Failed to log queries:", e);
+    }
 
     // Step 4: Retrieve topK chunks for both queries
     const client = await pool.connect();
