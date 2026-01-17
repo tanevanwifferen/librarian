@@ -7,6 +7,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import booksRouter from './books.js';
 import searchRouter from './search.js';
 import chatRouter from './chat.js';
+import uploadRouter from './upload.js';
 import { ensureScanSchedulerStarted, getScanStatus } from '../services/scanScheduler.js';
 
 const router = Router();
@@ -40,5 +41,6 @@ router.get('/index/status', async (_req: Request, res: Response, next: NextFunct
 router.use('/books', booksRouter);
 router.use('/search', searchRouter);
 router.use('/chat', chatRouter);
+router.use('/upload', uploadRouter);
 
 export default router;

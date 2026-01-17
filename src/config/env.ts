@@ -25,6 +25,8 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   OPENAI_API_KEY: z.string().min(1, 'OPENAI_API_KEY is required'),
   PDF_LIBRARY_DIR: z.string().min(1, 'PDF_LIBRARY_DIR is required'),
+  // Optional upload directory; defaults to PDF_LIBRARY_DIR
+  UPLOAD_DIR: z.string().optional(),
   // Keep PYTHON_BIN in the schema for backwards compatibility; final selection is computed below.
   PYTHON_BIN: z.string().min(1).default('python3'),
   OPENAI_EMBED_MODEL: z.string().default('text-embedding-3-small'),
@@ -52,6 +54,7 @@ export interface AppConfig {
   DATABASE_URL: string;
   OPENAI_API_KEY: string;
   PDF_LIBRARY_DIR: string;
+  UPLOAD_DIR: string; // Directory for uploaded files (defaults to PDF_LIBRARY_DIR)
   PYTHON_BIN: string; // Final resolved Python interpreter used for markitdown
   OPENAI_EMBED_MODEL: string;
   OPENAI_CHAT_MODEL: string;
@@ -115,6 +118,7 @@ if (rawPythonBin) {
 // Build final config object, preserving existing exports and adding PYTHON_ENV.
 const config: AppConfig = {
   ...base,
+  UPLOAD_DIR: base.UPLOAD_DIR || base.PDF_LIBRARY_DIR, // Default to PDF_LIBRARY_DIR
   PYTHON_BIN: finalPythonBin,
   PYTHON_ENV: pythonEnv, // Only defined when venv-selected interpreter is used.
 };

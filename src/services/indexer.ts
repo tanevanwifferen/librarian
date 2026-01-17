@@ -71,6 +71,16 @@ interface NewIndexed {
   chunks: number;
 }
 
+// Result type for single file indexing
+export interface SingleFileResult {
+  success: boolean;
+  book_id: string;
+  filename: string;
+  chunks_count: number;
+  status: 'indexed' | 'already_exists' | 'failed_parse' | 'failed_embed' | 'failed_insert';
+  error?: string;
+}
+
 export interface ScanResult {
   correlation_id: string;
   scanned_count: number;
@@ -304,4 +314,214 @@ export function newCorrelationId(): string {
   const ts = new Date().toISOString().replace(/[:.]/g, "");
   const rand = randomBytes(4).toString("hex");
   return `${ts}-${rand}`;
+}
+
+/**
+ * Index a single file. Used for uploads where we already have the file saved.
+ * @param filePath Absolute path to the file
+ * @param filename The filename to store in the database
+ * @param fileHash Optional SHA256 hash for duplicate detection
+ */
+export async function indexSingleFile(
+  filePath: string,
+  filename: string,
+  fileHash?: string
+): Promise<SingleFileResult> {
+  const bookId = uuidv4();
+
+  // 1) Check for duplicate by hash if provided
+  if (fileHash) {
+    const existing = await pool.query(
+      "SELECT id, filename FROM books WHERE file_hash = $1",
+      [fileHash]
+    );
+    if (existing.rows.length > 0) {
+      const row = existing.rows[0];
+      // Get chunks count for the existing book
+      const chunksRes = await pool.query(
+        "SELECT COUNT(*)::int as count FROM chunks WHERE book_id = $1",
+        [row.id]
+      );
+      return {
+        success: true,
+        book_id: row.id,
+        filename: row.filename,
+        chunks_count: chunksRes.rows[0]?.count || 0,
+        status: 'already_exists',
+      };
+    }
+  }
+
+  try {
+    // 2) Insert book row with hash
+    const insertRes = await pool.query(
+      "INSERT INTO books (id, filename, path, file_hash) VALUES ($1, $2, $3, $4) ON CONFLICT (filename) DO NOTHING",
+      [bookId, filename, filePath, fileHash || null]
+    );
+    if (insertRes.rowCount === 0) {
+      // Already exists by filename -> check if same hash or different
+      const existingByName = await pool.query(
+        "SELECT id, file_hash FROM books WHERE filename = $1",
+        [filename]
+      );
+      if (existingByName.rows.length > 0) {
+        const row = existingByName.rows[0];
+        const chunksRes = await pool.query(
+          "SELECT COUNT(*)::int as count FROM chunks WHERE book_id = $1",
+          [row.id]
+        );
+        return {
+          success: true,
+          book_id: row.id,
+          filename,
+          chunks_count: chunksRes.rows[0]?.count || 0,
+          status: 'already_exists',
+        };
+      }
+    }
+
+    // Mark as scanned
+    await pool.query(
+      "UPDATE books SET status = $1, error_text = NULL WHERE id = $2",
+      ["scanned", bookId]
+    );
+
+    // 3) Convert to Markdown
+    let md: string;
+    try {
+      md = await convertPdfToMarkdown(filePath, {
+        timeoutMs: config.MARKITDOWN_TIMEOUT_MS,
+        maxBytes: config.MARKITDOWN_MAX_BYTES,
+      });
+    } catch (convErr: any) {
+      await pool.query(
+        "UPDATE books SET status = $1, error_text = $2 WHERE id = $3",
+        ["failed_parse", convErr?.message ?? "PDF->Markdown conversion failed", bookId]
+      );
+      return {
+        success: false,
+        book_id: bookId,
+        filename,
+        chunks_count: 0,
+        status: 'failed_parse',
+        error: convErr?.message ?? "PDF->Markdown conversion failed",
+      };
+    }
+
+    // 4) Chunk markdown
+    const chunks = chunkMarkdown(md);
+    if (chunks.length === 0) {
+      await pool.query(
+        "UPDATE books SET status = $1, error_text = $2 WHERE id = $3",
+        ["failed_parse", "No chunks produced", bookId]
+      );
+      return {
+        success: false,
+        book_id: bookId,
+        filename,
+        chunks_count: 0,
+        status: 'failed_parse',
+        error: "No chunks produced from PDF",
+      };
+    }
+
+    // 5) Embed and insert in small batches
+    const batchSize = Number(config.EMBED_BATCH_SIZE) || 32;
+    for (let offset = 0; offset < chunks.length; offset += batchSize) {
+      const chunkBatch = chunks.slice(offset, offset + batchSize);
+
+      let vectorsBatch: number[][];
+      try {
+        vectorsBatch = await embedMany(chunkBatch);
+      } catch (embErr: any) {
+        await pool.query(
+          "UPDATE books SET status = $1, error_text = $2 WHERE id = $3",
+          ["failed_embed", embErr?.message ?? "Embedding failed", bookId]
+        );
+        return {
+          success: false,
+          book_id: bookId,
+          filename,
+          chunks_count: 0,
+          status: 'failed_embed',
+          error: embErr?.message ?? "Embedding failed",
+        };
+      }
+
+      // Insert batch in transaction
+      const client = await pool.connect();
+      let inTx = false;
+      try {
+        await client.query("BEGIN");
+        inTx = true;
+
+        for (let i = 0; i < chunkBatch.length; i++) {
+          const chunkId = uuidv4();
+          const embedding = vectorToParam(vectorsBatch[i]);
+          await client.query(
+            "INSERT INTO chunks (id, book_id, chunk_index, content, embedding) VALUES ($1, $2, $3, $4, $5::vector)",
+            [chunkId, bookId, offset + i, chunkBatch[i], embedding]
+          );
+        }
+
+        await client.query("COMMIT");
+        inTx = false;
+      } catch (txErr: any) {
+        if (inTx) {
+          try {
+            await client.query("ROLLBACK");
+          } catch {
+            // ignore rollback errors
+          }
+        }
+        await pool.query(
+          "UPDATE books SET status = $1, error_text = $2 WHERE id = $3",
+          ["failed_insert", txErr?.message ?? "Batch insert failed", bookId]
+        );
+        return {
+          success: false,
+          book_id: bookId,
+          filename,
+          chunks_count: 0,
+          status: 'failed_insert',
+          error: txErr?.message ?? "Batch insert failed",
+        };
+      } finally {
+        client.release();
+      }
+    }
+
+    // 6) Mark as indexed
+    await pool.query(
+      "UPDATE books SET status = $1, error_text = NULL, last_indexed_at = NOW(), chunks_count = $2 WHERE id = $3",
+      ["indexed", chunks.length, bookId]
+    );
+
+    return {
+      success: true,
+      book_id: bookId,
+      filename,
+      chunks_count: chunks.length,
+      status: 'indexed',
+    };
+  } catch (err: any) {
+    logger.error({ err, file: filePath }, "Single file indexing failed");
+    // Try to update error on the book
+    try {
+      await pool.query(
+        "UPDATE books SET error_text = $2 WHERE id = $1",
+        [bookId, err?.message ?? "Unknown error"]
+      );
+    } catch {
+      // ignore cleanup errors
+    }
+    return {
+      success: false,
+      book_id: bookId,
+      filename,
+      chunks_count: 0,
+      status: 'failed_parse',
+      error: err?.message ?? "Unknown error",
+    };
+  }
 }
