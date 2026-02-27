@@ -154,6 +154,8 @@ router.post('/chat', async (req: Request, res: Response, next: NextFunction) => 
         { role: 'system', content: `Context:\n${contextText}` },
         ...messages,
       ],
+      reasoning_effort: 'minimal',
+      verbosity: 'medium',
       max_completion_tokens: 1500,
     });
 
