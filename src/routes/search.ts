@@ -13,13 +13,11 @@ import { pool } from '../db/pool.js';
 import { embedText } from '../services/embeddings.js';
 import { clampSimilarity, vectorToParam } from '../util/sql.js';
 import { v4 as uuidv4 } from 'uuid';
-import { searchArxiv } from '../services/arxiv.js';
 
 const schema = z.object({
   // Cap query length to avoid oversized embedding requests and responses
   query: z.string().min(1).max(2000),
   topK: z.number().int().positive().max(100).optional().default(8),
-  arxivTopK: z.number().int().positive().max(50).optional().default(5),
 });
 
 const router = Router();
@@ -31,7 +29,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       res.status(400).json({ error: { message: parsed.error.message } });
       return;
     }
-    const { query: q, topK, arxivTopK } = parsed.data;
+    const { query: q, topK } = parsed.data;
 
     const qv = await embedText(q);
     const qvParam = vectorToParam(qv);
@@ -104,15 +102,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       score: clampSimilarity(Number(row.distance)),
     }));
 
-    // Fetch arXiv results in parallel (graceful degradation on failure)
-    let arxiv_matches: any[] = [];
-    try {
-      arxiv_matches = await searchArxiv(q, arxivTopK);
-    } catch {
-      // arXiv service unavailable — return empty results without breaking local search
-    }
-
-    res.json({ query: q, topK, matches, arxiv_matches });
+    res.json({ query: q, topK, matches });
   } catch (err) {
     next(err);
   }
