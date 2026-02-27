@@ -41,6 +41,7 @@ const schema = z.object({
   MARKITDOWN_TIMEOUT_MS: intWithDefault(300_000),         // 5 minutes
   EMBED_BATCH_SIZE: intWithDefault(32),
   INSERT_BATCH_SIZE: intWithDefault(64),
+  ARXIV_SEARCH_URL: z.string().url().default('http://localhost:19934'),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -70,6 +71,7 @@ export interface AppConfig {
   MARKITDOWN_TIMEOUT_MS: number;
   EMBED_BATCH_SIZE: number;
   INSERT_BATCH_SIZE: number;
+  ARXIV_SEARCH_URL: string;
 }
 
 // Start with parsed environment, then compute Python resolution precedence.

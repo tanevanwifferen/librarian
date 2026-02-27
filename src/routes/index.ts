@@ -8,6 +8,7 @@ import booksRouter from './books.js';
 import searchRouter from './search.js';
 import chatRouter from './chat.js';
 import uploadRouter from './upload.js';
+import arxivRouter from './arxiv.js';
 import { ensureScanSchedulerStarted, getScanStatus } from '../services/scanScheduler.js';
 
 const router = Router();
@@ -42,5 +43,6 @@ router.use('/books', booksRouter);
 router.use('/search', searchRouter);
 router.use('/chat', chatRouter);
 router.use('/upload', uploadRouter);
+router.use('/arxiv', arxivRouter);
 
 export default router;
