@@ -70,9 +70,22 @@ async function attemptRunIfIdle(): Promise<void> {
   logger.info({ correlationId }, 'Background scan starting');
 
   try {
+    // Scan the main occult library
     const result = await runScan(correlationId);
     lastResult = result;
     logger.info({ correlationId, result }, 'Background scan finished');
+
+    // Scan any additional dataset directories configured via DATASET_DIRS env var
+    const extraDirs = config.DATASET_DIRS;
+    for (const [dataset, dir] of Object.entries(extraDirs)) {
+      const extraId = newCorrelationId();
+      logger.info({ correlationId: extraId, dataset, dir }, 'Scanning extra dataset directory');
+      try {
+        await runScan(extraId, dir, dataset);
+      } catch (extraErr: any) {
+        logger.error({ err: extraErr, dataset, dir }, 'Extra dataset scan failed');
+      }
+    }
   } catch (err: any) {
     lastError = err?.message ?? 'Unknown error';
     logger.error({ err, correlationId }, 'Background scan failed');

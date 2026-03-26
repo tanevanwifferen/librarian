@@ -56,10 +56,12 @@ export interface UploadResult {
  * 1. Compute hash for duplicate detection
  * 2. Save to UPLOAD_DIR
  * 3. Run indexing pipeline
+ * @param dataset The dataset to assign this upload to (default: 'occult')
  */
 export async function handleUpload(
   buffer: Buffer,
-  originalFilename: string
+  originalFilename: string,
+  dataset: string = 'occult'
 ): Promise<UploadResult> {
   const filename = sanitizeFilename(originalFilename);
   const fileHash = computeFileHash(buffer);
@@ -104,7 +106,7 @@ export async function handleUpload(
   }
 
   // Run the indexing pipeline
-  const result: SingleFileResult = await indexSingleFile(targetPath, filename, fileHash);
+  const result: SingleFileResult = await indexSingleFile(targetPath, filename, fileHash, dataset);
 
   return {
     success: result.success,

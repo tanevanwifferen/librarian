@@ -42,6 +42,8 @@ const schema = z.object({
   EMBED_BATCH_SIZE: intWithDefault(32),
   INSERT_BATCH_SIZE: intWithDefault(64),
   ARXIV_SEARCH_URL: z.string().url().default('http://localhost:19934'),
+  // Optional JSON map of dataset name -> directory path, e.g. {"trading":"/data/trading"}
+  DATASET_DIRS: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -72,6 +74,8 @@ export interface AppConfig {
   EMBED_BATCH_SIZE: number;
   INSERT_BATCH_SIZE: number;
   ARXIV_SEARCH_URL: string;
+  // Parsed from DATASET_DIRS JSON env var; maps dataset name -> directory path
+  DATASET_DIRS: Record<string, string>;
 }
 
 // Start with parsed environment, then compute Python resolution precedence.
@@ -117,12 +121,26 @@ if (rawPythonBin) {
   // No PYTHON_BIN and no usable VENV_DIR; keep "python3" and rely on PATH. We do not explicitly try "python".
 }
 
+// Parse DATASET_DIRS JSON env var into a record, ignoring invalid JSON.
+let datasetDirs: Record<string, string> = {};
+if (base.DATASET_DIRS) {
+  try {
+    const parsed = JSON.parse(base.DATASET_DIRS);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      datasetDirs = parsed as Record<string, string>;
+    }
+  } catch {
+    // Invalid JSON; treated as empty
+  }
+}
+
 // Build final config object, preserving existing exports and adding PYTHON_ENV.
 const config: AppConfig = {
   ...base,
   UPLOAD_DIR: base.UPLOAD_DIR || base.PDF_LIBRARY_DIR, // Default to PDF_LIBRARY_DIR
   PYTHON_BIN: finalPythonBin,
   PYTHON_ENV: pythonEnv, // Only defined when venv-selected interpreter is used.
+  DATASET_DIRS: datasetDirs,
 };
 
 export default config;
