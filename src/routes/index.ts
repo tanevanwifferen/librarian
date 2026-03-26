@@ -9,6 +9,7 @@ import searchRouter from './search.js';
 import chatRouter from './chat.js';
 import uploadRouter from './upload.js';
 import arxivRouter from './arxiv.js';
+import unifiedRouter from './unified.js';
 import { ensureScanSchedulerStarted, getScanStatus } from '../services/scanScheduler.js';
 
 const router = Router();
@@ -44,5 +45,6 @@ router.use('/search', searchRouter);
 router.use('/chat', chatRouter);
 router.use('/upload', uploadRouter);
 router.use('/arxiv', arxivRouter);
+router.use('/unified', unifiedRouter);
 
 export default router;

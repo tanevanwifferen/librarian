@@ -321,11 +321,13 @@ export function newCorrelationId(): string {
  * @param filePath Absolute path to the file
  * @param filename The filename to store in the database
  * @param fileHash Optional SHA256 hash for duplicate detection
+ * @param dataset The dataset to assign this book to (default: 'occult')
  */
 export async function indexSingleFile(
   filePath: string,
   filename: string,
-  fileHash?: string
+  fileHash?: string,
+  dataset: string = 'occult'
 ): Promise<SingleFileResult> {
   const bookId = uuidv4();
 
@@ -355,8 +357,8 @@ export async function indexSingleFile(
   try {
     // 2) Insert book row with hash
     const insertRes = await pool.query(
-      "INSERT INTO books (id, filename, path, file_hash) VALUES ($1, $2, $3, $4) ON CONFLICT (filename) DO NOTHING",
-      [bookId, filename, filePath, fileHash || null]
+      "INSERT INTO books (id, filename, path, file_hash, dataset) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (filename) DO NOTHING",
+      [bookId, filename, filePath, fileHash || null, dataset]
     );
     if (insertRes.rowCount === 0) {
       // Already exists by filename -> check if same hash or different
