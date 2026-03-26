@@ -12,9 +12,12 @@ export interface ScannedFile {
 }
 
 export async function scanLibrary(): Promise<ScannedFile[]> {
-  const root = config.PDF_LIBRARY_DIR;
+  return scanDirectory(config.PDF_LIBRARY_DIR);
+}
+
+export async function scanDirectory(dir: string): Promise<ScannedFile[]> {
   const out: ScannedFile[] = [];
-  await walk(root, out);
+  await walk(dir, out);
   return out.sort((a, b) => a.filename.localeCompare(b.filename));
 }
 

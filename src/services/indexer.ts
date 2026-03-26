@@ -11,7 +11,7 @@ import pLimit from "p-limit";
 import { pool } from "../db/pool.js";
 import config from "../config/env.js";
 import logger from "../logging.js";
-import { scanLibrary } from "./scanner.js";
+import { scanLibrary, scanDirectory } from "./scanner.js";
 import { convertPdfToMarkdown } from "./markitdown.js";
 import { chunkMarkdown } from "./chunking.js";
 import { embedMany } from "./embeddings.js";
@@ -91,11 +91,15 @@ export interface ScanResult {
   duration_ms: number;
 }
 
-export async function runScan(correlationId: string): Promise<ScanResult> {
+export async function runScan(
+  correlationId: string,
+  dir?: string,
+  dataset: string = 'occult'
+): Promise<ScanResult> {
   const start = Date.now();
   // Gate entire scan to business hours window
   await waitForBusinessHoursIfNeeded("run-start");
-  const files = await scanLibrary();
+  const files = dir ? await scanDirectory(dir) : await scanLibrary();
   const limit = pLimit(Number(config.INDEX_CONCURRENCY) || 1);
 
   const newly_indexed: NewIndexed[] = [];
@@ -113,8 +117,8 @@ export async function runScan(correlationId: string): Promise<ScanResult> {
           // 1) Insert book row early to reserve work; skip if already indexed (by filename)
           // Use pool.query for one-off statement to avoid holding a client
           const insertRes = await pool.query(
-            "INSERT INTO books (id, filename, path) VALUES ($1, $2, $3) ON CONFLICT (filename) DO NOTHING",
-            [bookId, f.filename, f.path]
+            "INSERT INTO books (id, filename, path, dataset) VALUES ($1, $2, $3, $4) ON CONFLICT (filename) DO NOTHING",
+            [bookId, f.filename, f.path, dataset]
           );
           if (insertRes.rowCount === 0) {
             // Already exists due to filename unique constraint -> skip
