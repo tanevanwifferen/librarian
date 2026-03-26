@@ -97,6 +97,7 @@ router.post('/search', async (req: Request, res: Response, next: NextFunction) =
         title: r.title,
         authors: r.authors,
         abstract: r.abstract,
+        categories: r.categories,
         similarity: r.similarity,
       })),
     ];
